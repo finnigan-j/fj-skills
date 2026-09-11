@@ -1,0 +1,16 @@
+{
+  "$schema": "https://code.claude.com/schemas/marketplace.json",
+  "name": "finnigan-j",
+  "owner": {
+    "name": "Finnigan Johnson",
+    "url": "https://github.com/finnigan-j"
+  },
+  "description": "Finn's Claude Code skills",
+  "plugins": [
+    {
+      "name": "finnigan-j",
+      "source": "./",
+      "description": "Finn's Claude Code skills. Currently: claude-backup, an unattended weekly backup of Claude Code memories, skills, CLAUDE.md files and settings into a private git repo, with restore."
+    }
+  ]
+}

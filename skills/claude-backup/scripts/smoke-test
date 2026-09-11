@@ -1,0 +1,81 @@
+#!/bin/bash
+# End-to-end test of claude-backup against a fake HOME and a scratch repo with
+# a bare origin. Never touches the real ~/.claude or the real repo.
+set -euo pipefail
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+work="$(mktemp -d "${TMPDIR:-/tmp}/claude-backup-test.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+pass=0; fail=0
+ok()   { pass=$((pass+1)); echo "  ok   $*"; }
+bad()  { fail=$((fail+1)); echo "  FAIL $*"; }
+check(){ if eval "$1"; then ok "$2"; else bad "$2"; fi; }
+
+# --- fake HOME --------------------------------------------------------------
+H="$work/home"; C="$H/.claude"; P="$H/projects"
+mkdir -p "$C/skills/foo" "$C/projects/-x-proj/memory" "$C/projects/-x-empty/memory" \
+         "$C/plugins/cache/junk" "$C/shell-snapshots" "$P/app/.claude/worktrees/wt" "$P/noclaude"
+echo '# global' > "$C/CLAUDE.md"; echo '{"model":"x"}' > "$C/settings.json"
+echo 'skill' > "$C/skills/foo/SKILL.md"
+printf -- '---\nname: a\n---\nfact A\n' > "$C/projects/-x-proj/memory/a.md"
+echo '- [a](a.md)' > "$C/projects/-x-proj/memory/MEMORY.md"
+echo '{}' > "$C/plugins/installed_plugins.json"; echo 'cache' > "$C/plugins/cache/junk/x"
+echo 'snap' > "$C/shell-snapshots/s.sh"
+echo '# app' > "$P/app/CLAUDE.md"; echo '{}' > "$P/app/.claude/settings.local.json"
+echo 'big' > "$P/app/.claude/worktrees/wt/file"
+echo 'alias x=y' > "$H/.zshrc"
+touch "$C/.DS_Store" "$C/skills/.DS_Store"
+
+# --- scratch repo + bare origin ---------------------------------------------
+git init -q --bare "$work/origin.git"
+git init -q -b main "$work/repo"
+git -C "$work/repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+git -C "$work/repo" remote add origin "$work/origin.git"
+git -C "$work/repo" push -q -u origin main
+git -C "$work/repo" config user.name test; git -C "$work/repo" config user.email test@test
+echo 'wip' > "$work/repo/unrelated.txt"   # must never be swept into a backup commit
+
+run() { HOME="$H" CLAUDE_BACKUP_REPO="$work/repo" CLAUDE_DIR="$C" PROJECTS_DIR="$P" SHELL_RC="$H/.zshrc" \
+        CLAUDE_BACKUP_NO_NOTIFY=1 bash "$script_dir/claude-backup" 2>&1 | sed 's/^/    | /'; }
+
+echo "run 1: initial backup"; run
+R="$work/repo"
+check '[ -f "$R/dotclaude/projects/-x-proj/memory/a.md" ]'          "memory file mirrored"
+check '[ -f "$R/dotclaude/projects/-x-proj/memory/MEMORY.md" ]'     "MEMORY.md mirrored"
+check '[ ! -e "$R/dotclaude/projects/-x-empty" ]'                    "empty memory dir skipped"
+check '[ -f "$R/dotclaude/skills/foo/SKILL.md" ]'                    "skills mirrored"
+check '[ -f "$R/dotclaude/CLAUDE.md" ] && [ -f "$R/dotclaude/settings.json" ]' "CLAUDE.md + settings mirrored"
+check '[ -f "$R/dotclaude/plugins/installed_plugins.json" ]'         "plugin manifest mirrored"
+check '[ ! -e "$R/dotclaude/plugins/cache" ]'                        "plugin cache excluded"
+check '[ ! -e "$R/dotclaude/shell-snapshots" ]'                      "shell-snapshots excluded"
+check '[ -f "$R/dotclaude-projects/app/settings.local.json" ]'       "project .claude mirrored"
+check '[ ! -e "$R/dotclaude-projects/app/worktrees" ]'               "project worktrees excluded"
+check '[ ! -e "$R/dotclaude-projects/noclaude" ]'                    "project without .claude skipped"
+check '[ -f "$R/claude-mds/app.md" ]'                                "project CLAUDE.md mirrored"
+check '[ -f "$R/dotfiles/zshrc" ]'                                   "shell rc mirrored"
+check '[ -z "$(find "$R/dotclaude" -name .DS_Store)" ]'              ".DS_Store excluded"
+check '[ "$(git -C "$R" rev-list --count HEAD)" = 2 ]'               "exactly one backup commit"
+check 'git -C "$R" log -1 --format=%s | grep -q "^backup: "'         "commit message prefixed 'backup:'"
+check '[ -z "$(git -C "$R" ls-files unrelated.txt)" ]'               "unrelated WIP not committed"
+check '[ "$(git -C "$R" rev-parse HEAD)" = "$(git -C "$work/origin.git" rev-parse main)" ]' "pushed to origin"
+
+echo "run 2: no changes"; run
+check '[ "$(git -C "$R" rev-list --count HEAD)" = 2 ]'               "no-op run makes no commit"
+
+echo "run 3: memory deleted locally + new project memory"
+rm "$C/projects/-x-proj/memory/a.md"
+mkdir -p "$C/projects/-y/memory"; echo 'y' > "$C/projects/-y/memory/y.md"
+run
+check '[ ! -e "$R/dotclaude/projects/-x-proj/memory/a.md" ]'         "deleted memory removed from mirror"
+check '[ -f "$R/dotclaude/projects/-y/memory/y.md" ]'                "new project memory added"
+check '[ "$(git -C "$R" rev-list --count HEAD)" = 3 ]'               "third commit created"
+check 'git -C "$R" show HEAD~1:dotclaude/projects/-x-proj/memory/a.md >/dev/null 2>&1' "deleted memory still in history"
+
+echo "run 4: wrong branch is refused"
+git -C "$R" checkout -q -b feature
+out="$(run || true)"; echo "$out"
+check '[[ "$out" == *"not '"'"'main'"'"'"* ]]'                          "refuses to run off main"
+check '[ "$(git -C "$R" rev-list --count HEAD)" = 3 ]'               "no commit made while off main"
+git -C "$R" checkout -q main
+
+echo; echo "$pass passed, $fail failed"
+[ "$fail" -eq 0 ]

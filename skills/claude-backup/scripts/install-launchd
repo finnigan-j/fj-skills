@@ -1,0 +1,34 @@
+#!/bin/bash
+# Install (or reinstall) the weekly claude-backup launchd job for the current
+# user. Idempotent. Usage: install-launchd [--uninstall]
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo="$(git -C "$script_dir" rev-parse --show-toplevel)"
+label=local.claude-backup
+template="$repo/claude-backup/launchd/$label.plist"
+dest="$HOME/Library/LaunchAgents/$label.plist"
+domain="gui/$(id -u)"
+
+if [ "${1:-}" = "--uninstall" ]; then
+  launchctl bootout "$domain/$label" 2>/dev/null || true
+  rm -f "$dest"
+  echo "removed $label"
+  exit 0
+fi
+
+[ -f "$template" ] || { echo "template missing: $template" >&2; exit 1; }
+mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
+
+# Replace any existing instance, then render + load.
+launchctl bootout "$domain/$label" 2>/dev/null || true
+sed -e "s|__REPO__|$repo|g" -e "s|__HOME__|$HOME|g" "$template" > "$dest"
+plutil -lint "$dest" >/dev/null
+launchctl bootstrap "$domain" "$dest"
+
+echo "installed $label -> $dest"
+sched="$(plutil -extract StartCalendarInterval json -o - "$dest" 2>/dev/null || echo "see StartCalendarInterval in $dest")"
+echo "schedule : $sched  (local time; Weekday 0=Sun .. 6=Sat)"
+echo "script   : $repo/claude-backup/bin/claude-backup"
+echo "log      : $HOME/Library/Logs/claude-backup.log"
+echo "run now  : launchctl kickstart $domain/$label"

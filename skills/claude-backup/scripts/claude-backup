@@ -1,0 +1,128 @@
+#!/bin/bash
+# claude-backup — mirror the durable parts of Claude Code config into this
+# repo, commit, and push. Safe to run any time; scheduled weekly by launchd
+# (see ../launchd/ and install-launchd) or a systemd user timer.
+#
+# Env overrides (mainly for tests):
+#   CLAUDE_BACKUP_REPO  repo to write into   (default: repo containing this script)
+#   CLAUDE_DIR          live ~/.claude        (default: $HOME/.claude)
+#   PROJECTS_DIR        dir holding projects  (default: $HOME/projects)
+#   SHELL_RC            shell rc to mirror    (default: $HOME/.zshrc)
+#   CLAUDE_BACKUP_NO_NOTIFY  set to suppress desktop notifications
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="${CLAUDE_BACKUP_REPO:-$(git -C "$script_dir" rev-parse --show-toplevel)}"
+CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
+PROJECTS_DIR="${PROJECTS_DIR:-$HOME/projects}"
+SHELL_RC="${SHELL_RC:-$HOME/.zshrc}"
+BRANCH=main
+# Mirror roots — the ONLY paths this script ever stages. Anything else in the
+# repo (specs, notes, WIP) is left alone.
+MIRROR_ROOTS=(dotclaude dotclaude-projects claude-mds dotfiles)
+
+log()  { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
+die()  { log "ERROR: $*"; notify "Claude backup failed" "$*"; exit 1; }
+notify() {
+  [ -z "${CLAUDE_BACKUP_NO_NOTIFY:-}" ] || return 0
+  if command -v osascript >/dev/null 2>&1; then
+    osascript -e "display notification \"${2//\"/\\\"}\" with title \"${1//\"/\\\"}\"" >/dev/null 2>&1 || true
+  elif command -v notify-send >/dev/null 2>&1; then
+    notify-send "$1" "$2" >/dev/null 2>&1 || true
+  fi
+}
+git_() { git -C "$REPO" "$@"; }
+# rsync helper: mirror SRC dir into DST dir (trailing slashes handled here).
+mirror() { rsync -a --delete --exclude='.DS_Store' "$1/" "$2/"; }
+
+stage="$(mktemp -d "${TMPDIR:-/tmp}/claude-backup.XXXXXX")"
+trap 'rm -rf "$stage"' EXIT
+
+log "claude-backup start  repo=$REPO  claude_dir=$CLAUDE_DIR"
+[ -d "$CLAUDE_DIR" ] || die "CLAUDE_DIR not found: $CLAUDE_DIR"
+git_ rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo: $REPO"
+
+# ---- 1. branch + sync with origin -------------------------------------------
+current="$(git_ symbolic-ref --quiet --short HEAD || echo DETACHED)"
+[ "$current" = "$BRANCH" ] || die "repo is on '$current', not '$BRANCH' — switch back and rerun"
+
+online=1
+if git_ fetch --quiet origin "$BRANCH" 2>/dev/null; then
+  ahead_behind="$(git_ rev-list --left-right --count "HEAD...origin/$BRANCH")"
+  ahead="${ahead_behind%%[[:space:]]*}"; behind="${ahead_behind##*[[:space:]]}"
+  if [ "$behind" -gt 0 ]; then
+    [ "$ahead" -eq 0 ] || die "local $BRANCH has diverged from origin ($ahead ahead / $behind behind) — resolve by hand"
+    git_ pull --quiet --ff-only origin "$BRANCH" || die "fast-forward pull failed"
+    log "fast-forwarded $behind commit(s) from origin"
+  fi
+else
+  online=0
+  log "WARN: could not reach origin — will commit locally and push next run"
+fi
+
+# ---- 2. build the desired tree in a staging dir -----------------------------
+for r in "${MIRROR_ROOTS[@]}"; do mkdir -p "$stage/$r"; done
+
+# ~/.claude top-level files
+for f in CLAUDE.md settings.json settings.local.json keybindings.json; do
+  [ -f "$CLAUDE_DIR/$f" ] && cp "$CLAUDE_DIR/$f" "$stage/dotclaude/$f"
+done
+# ~/.claude top-level dirs
+for d in skills agents commands docs; do
+  [ -d "$CLAUDE_DIR/$d" ] && { mkdir -p "$stage/dotclaude/$d"; mirror "$CLAUDE_DIR/$d" "$stage/dotclaude/$d"; }
+done
+# plugin manifests (not the cache)
+for f in installed_plugins.json known_marketplaces.json; do
+  [ -f "$CLAUDE_DIR/plugins/$f" ] && { mkdir -p "$stage/dotclaude/plugins"; cp "$CLAUDE_DIR/plugins/$f" "$stage/dotclaude/plugins/$f"; }
+done
+# per-project memory — the reason this script exists
+mem_count=0
+for m in "$CLAUDE_DIR"/projects/*/memory; do
+  [ -d "$m" ] || continue
+  [ -n "$(find "$m" -type f -not -name .DS_Store -print -quit)" ] || continue   # skip empty
+  slug="$(basename "$(dirname "$m")")"
+  mkdir -p "$stage/dotclaude/projects/$slug/memory"
+  mirror "$m" "$stage/dotclaude/projects/$slug/memory"
+  mem_count=$((mem_count + $(find "$m" -type f -not -name .DS_Store | wc -l | tr -d ' ')))
+done
+# per-project .claude/ and CLAUDE.md
+if [ -d "$PROJECTS_DIR" ]; then
+  for p in "$PROJECTS_DIR"/*/; do
+    name="$(basename "$p")"
+    if [ -d "$p/.claude" ]; then
+      mkdir -p "$stage/dotclaude-projects/$name"
+      rsync -a --delete --exclude='.DS_Store' --exclude='/worktrees/' "$p/.claude/" "$stage/dotclaude-projects/$name/"
+      # drop it again if it turned out empty
+      rmdir "$stage/dotclaude-projects/$name" 2>/dev/null || true
+    fi
+    [ -f "$p/CLAUDE.md" ] && cp "$p/CLAUDE.md" "$stage/claude-mds/$name.md"
+  done
+fi
+# shell rc — stored without the leading dot (~/.zshrc -> dotfiles/zshrc)
+[ -f "$SHELL_RC" ] && cp "$SHELL_RC" "$stage/dotfiles/$(basename "$SHELL_RC" | sed 's/^\.//')"
+
+# ---- 3. staging -> repo, exact mirror ---------------------------------------
+for r in "${MIRROR_ROOTS[@]}"; do
+  mkdir -p "$REPO/$r"
+  mirror "$stage/$r" "$REPO/$r"
+done
+log "mirrored: $mem_count memory file(s) across $(ls -d "$stage"/dotclaude/projects/*/ 2>/dev/null | wc -l | tr -d ' ') project(s)"
+
+# ---- 4. commit only the mirror roots ----------------------------------------
+git_ add -A -- "${MIRROR_ROOTS[@]}"
+if git_ diff --cached --quiet; then
+  log "nothing to back up — mirror already matches"
+  exit 0
+fi
+changed="$(git_ diff --cached --numstat | wc -l | tr -d ' ')"
+git_ -c commit.gpgsign=false commit --quiet -m "backup: $(date '+%Y-%m-%d %a %H:%M') — $changed file(s) changed"
+log "committed $(git_ rev-parse --short HEAD): $changed file(s) changed"
+
+# ---- 5. push ----------------------------------------------------------------
+if [ "$online" -eq 1 ]; then
+  git_ push --quiet origin "$BRANCH" || die "commit saved locally but push failed"
+  log "pushed to origin/$BRANCH"
+else
+  die "committed locally; push skipped (offline) — will retry on next run"
+fi
+log "claude-backup done"

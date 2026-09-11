@@ -1,0 +1,11 @@
+[Unit]
+Description=Run claude-backup every Saturday at 12:00
+
+[Timer]
+# Persistent=true fires a missed run at next boot/wake, like launchd's
+# StartCalendarInterval on macOS. A machine that is off skips that week.
+OnCalendar=Sat 12:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
