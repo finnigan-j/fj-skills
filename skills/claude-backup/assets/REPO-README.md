@@ -7,7 +7,7 @@ accumulated context with it. **This repo is private and must stay private:**
 settings and shell files can carry API keys, and memories describe internal
 work.
 
-Set up with the `claude-backup` skill from https://github.com/finnigan-j/skills.
+Set up with the `claude-backup` skill from https://github.com/finnigan-j/fj-skills.
 
 ## Layout
 

@@ -14,7 +14,7 @@ as a plugin, or copy a single skill into `~/.claude/skills/`.
 This repo is a plugin marketplace. In Claude Code:
 
 ```
-/plugin marketplace add finnigan-j/skills
+/plugin marketplace add finnigan-j/fj-skills
 /plugin install fj-skills@finnigan-j-skills
 ```
 
@@ -25,14 +25,14 @@ with `/plugin marketplace update finnigan-j-skills`.
 ### Any agent that speaks the Agent Skills standard
 
 ```
-npx skills add https://github.com/finnigan-j/skills
+npx skills add https://github.com/finnigan-j/fj-skills
 ```
 
 ### By hand
 
 ```sh
-git clone https://github.com/finnigan-j/skills.git
-cp -r skills/skills/claude-backup ~/.claude/skills/
+git clone https://github.com/finnigan-j/fj-skills.git
+cp -r fj-skills/skills/claude-backup ~/.claude/skills/
 ```
 
 ## claude-backup

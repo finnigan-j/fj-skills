@@ -6,8 +6,8 @@
     "name": "Finnigan Johnson",
     "url": "https://github.com/finnigan-j"
   },
-  "homepage": "https://github.com/finnigan-j/skills",
-  "repository": "https://github.com/finnigan-j/skills",
+  "homepage": "https://github.com/finnigan-j/fj-skills",
+  "repository": "https://github.com/finnigan-j/fj-skills",
   "license": "MIT",
   "keywords": ["claude-code", "skills", "backup", "memory", "dotfiles", "launchd", "systemd"],
   "skills": ["./skills/claude-backup"]
