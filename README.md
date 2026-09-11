@@ -15,12 +15,12 @@ This repo is a plugin marketplace. In Claude Code:
 
 ```
 /plugin marketplace add finnigan-j/skills
-/plugin install finnigan-j@finnigan-j
+/plugin install fj-skills@finnigan-j-skills
 ```
 
-Skills load as `/finnigan-j:<skill>` (for example `/finnigan-j:claude-backup`) and
+Skills load as `/fj-skills:<skill>` (for example `/fj-skills:claude-backup`) and
 Claude also picks them up on its own when a request matches. Update later
-with `/plugin marketplace update finnigan-j`.
+with `/plugin marketplace update finnigan-j-skills`.
 
 ### Any agent that speaks the Agent Skills standard
 

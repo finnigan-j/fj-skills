@@ -1,7 +1,7 @@
 {
-  "name": "finnigan-j",
+  "name": "fj-skills",
   "description": "Finn's Claude Code skills. Currently: claude-backup, an unattended weekly backup of Claude Code memories, skills, CLAUDE.md files and settings into a private git repo, with restore.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "Finnigan Johnson",
     "url": "https://github.com/finnigan-j"
@@ -9,5 +9,6 @@
   "homepage": "https://github.com/finnigan-j/skills",
   "repository": "https://github.com/finnigan-j/skills",
   "license": "MIT",
-  "keywords": ["claude-code", "skills", "backup", "memory", "dotfiles", "launchd", "systemd"]
+  "keywords": ["claude-code", "skills", "backup", "memory", "dotfiles", "launchd", "systemd"],
+  "skills": ["./skills/claude-backup"]
 }
